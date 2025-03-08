@@ -20,4 +20,4 @@
 2. **Run the installer**:
    ```bash
    chmod +x install-my-toolkit.sh
-   ./install-my-toolkit.sh ./my-toolkit
+   ./install-my-toolkit.sh
