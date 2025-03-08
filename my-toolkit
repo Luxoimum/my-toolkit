@@ -1,0 +1,630 @@
+#!/usr/bin/env bash
+#
+# my-toolkit: A single script for:
+#   1) Managing a Bazel workspace (create, add, build)
+#   2) Generating Kotlin or CDK (TypeScript) skeletons
+#
+# Fix: No 'package_dir' attribute => no filegroup => no "doesn't have provider 'path'" error.
+
+set -e  # Exit on any error
+
+########################################
+# Print Usage
+########################################
+function usage() {
+  cat <<EOF
+Usage:
+
+  # Workspace commands
+  my-toolkit workspace create <path>
+    Creates a new Bazel workspace at <path> with minimal WORKSPACE + my_rules.bzl.
+    Installs Bazel if missing.
+
+  my-toolkit workspace add -p <GitHubUser/RepoName> [-p <GitHubUser/RepoName> ...]
+    Clones repos into the current workspace folder, configures local_repository in WORKSPACE.
+
+  my-toolkit workspace build [ -all | package1 package2 ... ]
+    - No args: build local package if current dir has BUILD.bazel
+    - '-all': build all packages (bazel build //...)
+    - package names: build those local_repository packages
+
+  # Skeleton commands
+  my-toolkit skeleton create kotlin <ProjectName>
+    Creates a minimal Kotlin project with:
+      - build.gradle.kts
+      - BUILD.bazel (calls gradle_package)
+      - src/{main,test}
+      - Git initialized
+
+  my-toolkit skeleton create cdk <ProjectName>
+    Creates a minimal CDK TypeScript project with:
+      - package.json, tsconfig.json, cdk.json
+      - BUILD.bazel (calls node_package)
+      - src/index.ts
+      - Git initialized
+
+Examples:
+  ./my-toolkit workspace create my-new-ws
+  cd my-new-ws
+  ./my-toolkit workspace add -p Luxoimum/RealEstateService
+  ./my-toolkit workspace build -all
+
+  ./my-toolkit skeleton create kotlin MyKotlinApp
+  ./my-toolkit skeleton create cdk MyCdkProj
+EOF
+  exit 1
+}
+
+########################################
+# 1) Check or Install Bazel
+########################################
+function check_or_install_bazel() {
+  if command -v bazel >/dev/null 2>&1; then
+    echo "Bazel is already installed."
+    return
+  fi
+
+  echo "Bazel not found. Attempting to install Bazel..."
+
+  if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+    # Linux => try apt-get
+    if command -v apt-get >/dev/null 2>&1; then
+      sudo apt-get update && sudo apt-get install -y bazel
+    else
+      echo "No apt-get found. Please install Bazel manually."
+      exit 1
+    fi
+  elif [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS => try brew
+    if command -v brew >/dev/null 2>&1; then
+      brew install bazel
+    else
+      echo "Homebrew not found. Please install Bazel manually or install Homebrew."
+      exit 1
+    fi
+  else
+    echo "Unsupported OS. Please install Bazel manually."
+    exit 1
+  fi
+
+  if ! command -v bazel >/dev/null 2>&1; then
+    echo "Bazel installation attempt failed. Please install manually."
+    exit 1
+  fi
+
+  echo "Bazel successfully installed."
+}
+
+########################################
+# 2) In-place sed for macOS vs Linux
+########################################
+function inplace_sed() {
+  local search="$1"
+  local replace="$2"
+  local file="$3"
+
+  if [[ ! -f "$file" ]]; then
+    echo "Error: File '$file' not found; cannot edit."
+    exit 1
+  fi
+
+  if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS sed
+    sed -i "" "s/${search}/${replace}/g" "$file" || {
+      echo "Error: Failed to edit '$file' with macOS sed."
+      exit 1
+    }
+  else
+    # Linux/GNU sed
+    sed -i "s/${search}/${replace}/g" "$file" || {
+      echo "Error: Failed to edit '$file' with GNU sed."
+      exit 1
+    }
+  fi
+}
+
+########################################
+# 3) WORKSPACE COMMANDS
+########################################
+
+########################################
+# workspace create <path>
+########################################
+function workspace_create() {
+  local TARGET_DIR="$1"
+  if [ -z "$TARGET_DIR" ]; then
+    echo "Error: 'workspace create' requires <path>."
+    usage
+  fi
+
+  check_or_install_bazel
+
+  mkdir -p "$TARGET_DIR"
+  cd "$TARGET_DIR"
+
+  # Create minimal WORKSPACE
+  if [ ! -f "WORKSPACE" ]; then
+    cat <<EOF > WORKSPACE
+workspace(name = "$(basename "$TARGET_DIR")")
+
+# Minimal Bazel workspace
+# We'll load custom rules from //:my_rules.bzl for bridging gradle/npm
+EOF
+    echo "Created WORKSPACE in $(pwd)."
+  else
+    echo "WORKSPACE already exists. Skipping creation."
+  fi
+
+  # Create my_rules.bzl with no 'package_dir' attribute
+  if [ ! -f "my_rules.bzl" ]; then
+    cat <<'EOF' > my_rules.bzl
+def _gradle_package_impl(ctx):
+    # Use ctx.label.package to find the subdir of the BUILD file
+    pkg_dir = ctx.label.package
+    if pkg_dir == "":
+        shell_cmd = "./gradlew build"
+    else:
+        shell_cmd = "cd {} && ./gradlew build".format(pkg_dir)
+
+    ctx.actions.run_shell(
+        outputs = [ctx.actions.declare_directory("build_output")],
+        inputs = [],
+        command = shell_cmd,
+    )
+
+gradle_package = rule(
+    implementation = _gradle_package_impl,
+)
+
+def _node_package_impl(ctx):
+    pkg_dir = ctx.label.package
+    if pkg_dir == "":
+        shell_cmd = "npm install && npm run build"
+    else:
+        shell_cmd = "cd {} && npm install && npm run build".format(pkg_dir)
+
+    ctx.actions.run_shell(
+        outputs = [ctx.actions.declare_directory("node_build_output")],
+        inputs = [],
+        command = shell_cmd,
+    )
+
+node_package = rule(
+    implementation = _node_package_impl,
+)
+EOF
+    echo "Created my_rules.bzl with gradle_package/node_package using ctx.label.package."
+  fi
+
+  # Minimal BUILD file at root so //:my_rules.bzl is recognized
+  if [ ! -f "BUILD" ] && [ ! -f "BUILD.bazel" ]; then
+    echo "Creating a minimal BUILD file in the workspace root..."
+    cat <<EOF > BUILD
+# Minimal BUILD file for the workspace root
+# Ensures root dir is recognized as a Bazel package
+
+package(default_visibility = ["//visibility:public"])
+EOF
+    echo "Created BUILD in the workspace root."
+  else
+    echo "A BUILD file already exists at the workspace root; skipping creation."
+  fi
+
+  echo "Workspace setup complete in $TARGET_DIR."
+}
+
+########################################
+# workspace add -p <user/repo> ...
+########################################
+function workspace_add() {
+  local REPOS=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      -p)
+        shift
+        if [ -z "$1" ]; then
+          echo "Error: '-p' requires <GitHubUser/RepoName>"
+          usage
+        fi
+        REPOS+=("$1")
+        shift
+        ;;
+      *)
+        echo "Unknown argument: $1"
+        usage
+        ;;
+    esac
+  done
+
+  if [ ${#REPOS[@]} -eq 0 ]; then
+    echo "Error: No repos specified. Use '-p <user/repo>'."
+    usage
+  fi
+
+  if [ ! -f "WORKSPACE" ]; then
+    echo "Error: No WORKSPACE file in current directory. Please create or cd into a Bazel workspace first."
+    exit 1
+  fi
+
+  for PKG in "${REPOS[@]}"; do
+    local GITHUB_URL="https://github.com/$PKG.git"
+    local REPO_NAME="$(basename "$PKG")"
+
+    if [ -d "$REPO_NAME" ]; then
+      echo "Directory '$REPO_NAME' already exists; skipping clone."
+    else
+      echo "Cloning $GITHUB_URL into $(pwd)/$REPO_NAME"
+      git clone "$GITHUB_URL" "$REPO_NAME"
+    fi
+
+    # Append local_repository to WORKSPACE
+    cat <<EOF >> WORKSPACE
+
+# Added by my-toolkit for $PKG
+local_repository(
+    name = "$REPO_NAME",
+    path = "$REPO_NAME",
+)
+EOF
+
+    # Create a minimal BUILD.bazel if none exists
+    if [ ! -f "$REPO_NAME/BUILD.bazel" ] && [ ! -f "$REPO_NAME/BUILD" ]; then
+      if [ -f "$REPO_NAME/build.gradle" ] || [ -f "$REPO_NAME/build.gradle.kts" ]; then
+        cat <<BUILD_EOF > "$REPO_NAME/BUILD.bazel"
+load("//:my_rules.bzl", "gradle_package")
+
+gradle_package(
+    name = "${REPO_NAME}_pkg",
+)
+BUILD_EOF
+        echo "Created a minimal BUILD.bazel for Gradle-based $REPO_NAME."
+      elif [ -f "$REPO_NAME/package.json" ]; then
+        cat <<BUILD_EOF > "$REPO_NAME/BUILD.bazel"
+load("//:my_rules.bzl", "node_package")
+
+node_package(
+    name = "${REPO_NAME}_pkg",
+)
+BUILD_EOF
+        echo "Created a minimal BUILD.bazel for Node-based $REPO_NAME."
+      else
+        echo "No Gradle or package.json found in $REPO_NAME; skipping auto BUILD file."
+      fi
+    fi
+    echo "Configured local_repository for $PKG in WORKSPACE."
+  done
+
+  echo "Done adding repositories."
+}
+
+########################################
+# workspace build ...
+########################################
+function workspace_build() {
+  # If no args => build local package if there's a BUILD file
+  if [ $# -eq 0 ]; then
+    build_local_package
+    exit 0
+  fi
+
+  # if first arg is -all => bazel build //...
+  if [ "$1" == "-all" ]; then
+    verify_in_workspace
+    bazel build //...
+    exit 0
+  fi
+
+  # build specified packages
+  verify_in_workspace
+  for pkg in "$@"; do
+    local target_query="@${pkg}//..."
+    if ! bazel query "$target_query" >/dev/null 2>&1; then
+      echo "Error: Package '$pkg' not found in Bazel workspace (tried $target_query)."
+      exit 1
+    fi
+    echo "Building $pkg => bazel build $target_query"
+    bazel build "$target_query"
+  done
+}
+
+function build_local_package() {
+  verify_in_workspace
+  local current_dir="$(pwd)"
+  local ws_dir
+  ws_dir="$(bazel info workspace 2>/dev/null || true)"
+  if [ -z "$ws_dir" ]; then
+    echo "Error: Not in a Bazel workspace (bazel info workspace is empty)."
+    exit 1
+  fi
+
+  local build_file=""
+  for f in BUILD BUILD.bazel; do
+    if [ -f "$current_dir/$f" ]; then
+      build_file="$f"
+      break
+    fi
+  done
+
+  if [ -z "$build_file" ]; then
+    echo "Error: No BUILD file in the current directory. Provide package names or run in a subfolder with BUILD."
+    exit 1
+  fi
+
+  # Relative path from workspace root
+  local rel_path
+  rel_path="$(realpath --relative-to="$ws_dir" "$current_dir")"
+
+  echo "Building local package //${rel_path}:all ..."
+  bazel build "//${rel_path}:all"
+}
+
+function verify_in_workspace() {
+  local ws
+  ws="$(bazel info workspace 2>/dev/null || true)"
+  if [ -z "$ws" ]; then
+    echo "Error: Not inside a Bazel workspace."
+    exit 1
+  fi
+}
+
+########################################
+# 4) SKELETON COMMANDS
+########################################
+
+########################################
+# create_kotlin_project
+########################################
+function create_kotlin_project() {
+  local projectName="$1"
+
+  if [ -z "$projectName" ]; then
+    echo "Error: Missing Kotlin project name."
+    usage
+  fi
+
+  if [ -d "$projectName" ]; then
+    echo "Error: Directory '$projectName' already exists. Cannot overwrite."
+    exit 1
+  fi
+
+  mkdir -p "$projectName/src/main/kotlin/${projectName}"
+  mkdir -p "$projectName/src/test/kotlin/${projectName}"
+
+  cat <<'GRADLE_EOF' > "${projectName}/build.gradle.kts"
+plugins {
+    kotlin("jvm") version "1.8.0"
+}
+
+repositories {
+    mavenCentral()
+}
+
+dependencies {
+    testImplementation(kotlin("test"))
+}
+GRADLE_EOF
+
+  cat <<'KOTLIN_MAIN' > "${projectName}/src/main/kotlin/${projectName}/App.kt"
+package PROJECT_NAME
+
+fun main() {
+    println("Hello from PROJECT_NAME")
+}
+KOTLIN_MAIN
+
+  cat <<'KOTLIN_TEST' > "${projectName}/src/test/kotlin/${projectName}/AppTest.kt"
+package PROJECT_NAME
+
+import kotlin.test.Test
+import kotlin.test.assertTrue
+
+class AppTest {
+
+    @Test
+    fun testExample() {
+        assertTrue("Replace with real tests") {
+            1 + 1 == 2
+        }
+    }
+}
+KOTLIN_TEST
+
+  # Replace placeholders
+  inplace_sed "PROJECT_NAME" "$projectName" "${projectName}/src/main/kotlin/${projectName}/App.kt"
+  inplace_sed "PROJECT_NAME" "$projectName" "${projectName}/src/test/kotlin/${projectName}/AppTest.kt"
+
+  # Minimal BUILD.bazel for gradle_package
+  cat <<BUILD_EOF > "${projectName}/BUILD.bazel"
+load("//:my_rules.bzl", "gradle_package")
+
+gradle_package(
+    name = "${projectName}_pkg",
+)
+BUILD_EOF
+
+  # Initialize git
+  pushd "$projectName" >/dev/null
+  if git init; then
+    git add .
+    if git commit -m "Initial commit (Kotlin skeleton)" >/dev/null; then
+      echo "Git initialized with initial commit."
+    else
+      echo "Warning: git commit failed. Possibly no Git user/email configured."
+    fi
+  else
+    echo "Warning: git init failed in $projectName. Please initialize git manually if needed."
+  fi
+  popd >/dev/null
+
+  echo "Kotlin project '$projectName' created successfully."
+}
+
+########################################
+# create_cdk_project
+########################################
+function create_cdk_project() {
+  local projectName="$1"
+
+  if [ -z "$projectName" ]; then
+    echo "Error: Missing CDK project name."
+    usage
+  fi
+
+  if [ -d "$projectName" ]; then
+    echo "Error: Directory '$projectName' already exists. Cannot overwrite."
+    exit 1
+  fi
+
+  mkdir -p "$projectName/src"
+
+  cat <<'PKGJSON_EOF' > "${projectName}/package.json"
+{
+  "name": "PROJECT_NAME",
+  "version": "0.1.0",
+  "description": "Minimal CDK project",
+  "scripts": {
+    "build": "tsc",
+    "deploy": "cdk deploy"
+  },
+  "devDependencies": {
+    "typescript": "^4.9.5",
+    "@aws-cdk/assertions": "2.65.0",
+    "@aws-cdk/core": "2.65.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.65.0",
+    "constructs": "^10.1.246"
+  }
+}
+PKGJSON_EOF
+
+  inplace_sed "PROJECT_NAME" "$projectName" "${projectName}/package.json"
+
+  # tsconfig.json
+  cat <<'TSCONFIG_EOF' > "${projectName}/tsconfig.json"
+{
+  "compilerOptions": {
+    "target": "ES2021",
+    "module": "commonjs",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "outDir": "dist"
+  },
+  "include": [
+    "src/**/*.ts"
+  ]
+}
+TSCONFIG_EOF
+
+  # cdk.json
+  cat <<'CDKJSON_EOF' > "${projectName}/cdk.json"
+{
+  "app": "npx ts-node --prefer-ts-exts src/index.ts"
+}
+CDKJSON_EOF
+
+  # Minimal index.ts
+  cat <<'INDEX_TS_EOF' > "${projectName}/src/index.ts"
+import { App, Stack, StackProps } from 'aws-cdk-lib';
+import { Construct } from 'constructs';
+
+export class MyCdkStack extends Stack {
+  constructor(scope: Construct, id: string, props?: StackProps) {
+    super(scope, id, props);
+    // Define your resources here
+  }
+}
+
+const app = new App();
+new MyCdkStack(app, 'MyCdkStack');
+app.synth();
+INDEX_TS_EOF
+
+  # Minimal BUILD.bazel for node_package
+  cat <<BUILD_EOF > "${projectName}/BUILD.bazel"
+load("//:my_rules.bzl", "node_package")
+
+node_package(
+    name = "${projectName}_pkg",
+)
+BUILD_EOF
+
+  # Initialize git
+  pushd "$projectName" >/dev/null
+  if git init; then
+    git add .
+    if git commit -m "Initial commit (CDK skeleton)" >/dev/null; then
+      echo "Git initialized with initial commit."
+    else
+      echo "Warning: git commit failed. Possibly no Git user/email configured."
+    fi
+  else
+    echo "Warning: git init failed in $projectName. Please initialize git manually if needed."
+  fi
+  popd >/dev/null
+
+  echo "CDK project '$projectName' created successfully."
+}
+
+########################################
+# skeleton_create
+########################################
+function skeleton_create() {
+  local lang="$1"
+  local proj="$2"
+
+  if [ "$lang" == "kotlin" ]; then
+    create_kotlin_project "$proj"
+  elif [ "$lang" == "cdk" ]; then
+    create_cdk_project "$proj"
+  else
+    echo "Error: Unknown skeleton type '$lang'. Must be 'kotlin' or 'cdk'."
+    usage
+  fi
+}
+
+########################################
+# MAIN CLI DISPATCH
+########################################
+if [ $# -lt 2 ]; then
+  usage
+fi
+
+TOP_CMD="$1"
+shift
+
+case "$TOP_CMD" in
+  workspace)
+    if [ $# -lt 1 ]; then
+      usage
+    fi
+    SUB_CMD="$1"
+    shift
+    case "$SUB_CMD" in
+      create)
+        workspace_create "$1"
+        ;;
+      add)
+        workspace_add "$@"
+        ;;
+      build)
+        workspace_build "$@"
+        ;;
+      *)
+        usage
+        ;;
+    esac
+    ;;
+  skeleton)
+    if [ "$1" == "create" ] && [ $# -ge 3 ]; then
+      skeleton_create "$2" "$3"
+    else
+      usage
+    fi
+    ;;
+  *)
+    usage
+    ;;
+esac

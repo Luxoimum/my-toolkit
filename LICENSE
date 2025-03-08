@@ -1,0 +1,10 @@
+
+---
+
+### How to Use
+
+- **Copy** `install-my-toolkit.sh` and **`README.md`** into your repository (alongside `my-toolkit`).  
+- **Edit** the README to match your organization’s usage or add more details.  
+- Distribute these files so team members can easily install and consult the usage instructions.
+
+With these in place, you have a **complete** solution for installing `my-toolkit` and a helpful readme to guide users.
