@@ -38,5 +38,18 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
   echo "  export PATH=\"\$PATH:$INSTALL_DIR\""
 fi
 
+# Add shortcut to the .zshrc or .bashrc file
+# Check if the shell is zsh
+if [ -n "$ZSH_VERSION" ]; then
+  SHELL_RC="$HOME/.zshrc"
+else
+  SHELL_RC="$HOME/.bashrc"
+fi
+
+echo "Adding shortcut to $SHELL_RC"
+echo "alias mtk=\"$INSTALL_DIR/my-toolkit\"" >> "$SHELL_RC"
+echo "alias tkw=\"$INSTALL_DIR/my-toolkit workspace\"" >> "$SHELL_RC"
+echo "alias tks=\"$INSTALL_DIR/my-toolkit skeleton\"" >> "$SHELL_RC"
+
 echo "Done. You can now run 'my-toolkit' from any directory, provided $INSTALL_DIR is in your PATH."
 
