@@ -19,10 +19,6 @@ EOF
   exit 1
 }
 
-if [ $# -lt 1 ]; then
-  usage
-fi
-
 SCRIPT_PATH="./my-toolkit"
 INSTALL_DIR="$HOME/.local/bin"
 
