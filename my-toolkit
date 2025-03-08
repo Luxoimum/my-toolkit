@@ -328,6 +328,14 @@ function workspace_build() {
   done
 }
 
+function relative_path() {
+  local target="$1"
+  local start="$2"
+
+  # We use Python's os.path.relpath for a cross-platform approach:
+  python3 -c "import os,sys; print(os.path.relpath(sys.argv[1], sys.argv[2]))" "$target" "$start"
+}
+
 function build_local_package() {
   verify_in_workspace
   local current_dir="$(pwd)"
@@ -351,9 +359,9 @@ function build_local_package() {
     exit 1
   fi
 
-  # Relative path from workspace root
+  # Use python to compute the relative path from the workspace root
   local rel_path
-  rel_path="$(realpath --relative-to="$ws_dir" "$current_dir")"
+  rel_path="$(relative_path "$current_dir" "$ws_dir")"
 
   echo "Building local package //${rel_path}:all ..."
   bazel build "//${rel_path}:all"
