@@ -606,6 +606,7 @@ BUILD_EOF
 
 function create_react_native_project() {
   local projectName="$1"
+  local parameter="$2"
 
   if [ -z "$projectName" ]; then
     echo "Error: Missing React Native project name."
@@ -624,10 +625,11 @@ function create_react_native_project() {
   fi
 
   # Check if --expo parameter is provided
-  if [ "$2" == "--expo" ]; then
+  echo "Creating React Native project '$projectName' with parameter '$parameter'..."
+  if [ "$parameter" == "--expo" ]; then
     npx create-expo-app $projectName
   else
-    npx react-native init $projectName
+    npx @react-native-community/cli init $projectName
   fi
 
   # Minimal BUILD.bazel for node_package
@@ -663,13 +665,16 @@ BUILD_EOF
 function skeleton_create() {
   local lang="$1"
   local proj="$2"
+  local parameter="$3"
+
+  echo "Creating $lang project '$proj' and parameter '$parameter'..."
 
   if [ "$lang" == "kotlin" ]; then
     create_kotlin_project "$proj"
   elif [ "$lang" == "cdk" ]; then
     create_cdk_project "$proj"
   elif [ "$lang" == "rn" ]; then
-    create_react_native_project "$proj" "$3"
+    create_react_native_project "$proj" "$parameter"
   else
     echo "Error: Unknown skeleton type '$lang'. Must be 'kotlin' or 'cdk'."
     usage
@@ -710,7 +715,7 @@ case "$TOP_CMD" in
     ;;
   skeleton)
     if [ "$1" == "create" ] && [ $# -ge 3 ]; then
-      skeleton_create "$2" "$3"
+      skeleton_create "$2" "$3" "$4"
     else
       usage
     fi
