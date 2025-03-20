@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+
+# Create a new workspace using my-toolkit
+# The workspace will be created in the current directory
+# The workspace will be named "my-workspace"
+# The workspace will be created using the "my-toolkit" toolkit
+
+# Create the workspace, use a uuid to avoid conflicts
+uuid=$(uuidgen)
+my-toolkit create workspace my-workspace-$uuid
+
+# Check if the workspace was created
+if [ -d "my-workspace-$uuid" ]; then
+  echo "Workspace created successfully"
+else
+  echo "Failed to create workspace"
+fi
+
+# Cleanup
+rm -rf my-workspace-$uuid

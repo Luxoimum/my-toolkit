@@ -43,6 +43,12 @@ Usage:
       - src/index.ts
       - Git initialized
 
+  my-toolkit skeleton create rn <ProjectName> [--expo]
+    Creates a minimal React Native project with:
+      - npx react-native init <ProjectName> or npx create-expo-app <ProjectName>
+      - BUILD.bazel (calls node_package)
+      - Git initialized
+
 Examples:
   ./my-toolkit workspace create my-new-ws
   cd my-new-ws
@@ -51,6 +57,7 @@ Examples:
 
   ./my-toolkit skeleton create kotlin MyKotlinApp
   ./my-toolkit skeleton create cdk MyCdkProj
+  ./my-toolkit skeleton create rn MyReactNativeApp
 EOF
   exit 1
 }
@@ -209,6 +216,13 @@ EOF
   else
     echo "A BUILD file already exists at the workspace root; skipping creation."
   fi
+  # Ask customer for the Github organization name to be used in the local_repository
+  if [ ! -f "CONFIG" ]; then
+    read -p "Enter the Github organization name: " org_name
+    cat <<EOF > CONFIG
+ORG_NAME=$org_name
+EOF
+  fi
 
   echo "Workspace setup complete in $TARGET_DIR."
 }
@@ -224,7 +238,7 @@ function workspace_add() {
       -p)
         shift
         if [ -z "$1" ]; then
-          echo "Error: '-p' requires <GitHubUser/RepoName>"
+          echo "Error: '-p' requires <RepoName>"
           usage
         fi
         REPOS+=("$1")
@@ -247,8 +261,18 @@ function workspace_add() {
     exit 1
   fi
 
+  # Read org name from CONFIG
+  local ORG_NAME
+  if [ -f "CONFIG" ]; then
+    ORG_NAME="$(grep ORG_NAME CONFIG | cut -d= -f2)"
+  else
+    echo "Error: No CONFIG file found. Please run 'workspace create' first."
+    exit 1
+  fi
+
+  # Clone repos and add local_repository to WORKSPACE
   for PKG in "${REPOS[@]}"; do
-    local GITHUB_URL="https://github.com/$PKG.git"
+    local GITHUB_URL="https://github.com/$ORG_NAME/$PKG.git"
     local REPO_NAME="$(basename "$PKG")"
 
     if [ -d "$REPO_NAME" ]; then
@@ -577,6 +601,63 @@ BUILD_EOF
 }
 
 ########################################
+# create_react_native_project
+########################################
+
+function create_react_native_project() {
+  local projectName="$1"
+
+  if [ -z "$projectName" ]; then
+    echo "Error: Missing React Native project name."
+    usage
+  fi
+
+  if [ -d "$projectName" ]; then
+    echo "Error: Directory '$projectName' already exists. Cannot overwrite."
+    exit 1
+  fi
+
+  # Check if npx is installed
+  if ! command -v npx >/dev/null 2>&1; then
+    echo "Error: npx not found. Please install Node.js/npm to use npx."
+    exit 1
+  fi
+
+  # Check if --expo parameter is provided
+  if [ "$2" == "--expo" ]; then
+    npx create-expo-app $projectName
+  else
+    npx react-native init $projectName
+  fi
+
+  # Minimal BUILD.bazel for node_package
+  cat <<BUILD_EOF > "${projectName}/BUILD.bazel"
+load("//:my_rules.bzl", "node_package")
+
+node_package(
+    name = "${projectName}_pkg",
+)
+BUILD_EOF
+
+  # Initialize git
+  pushd "$projectName" >/dev/null
+  if git init; then
+    git add .
+    if git commit -m "Initial commit (React Native skeleton)" >/dev/null; then
+      echo "Git initialized with initial commit."
+    else
+      echo "Warning: git commit failed. Possibly no Git user/email configured."
+    fi
+  else
+    echo "Warning: git init failed in $projectName. Please initialize git manually if needed."
+  fi
+  popd >/dev/null
+
+  echo "React Native project '$projectName' created successfully."
+}
+
+
+########################################
 # skeleton_create
 ########################################
 function skeleton_create() {
@@ -587,6 +668,8 @@ function skeleton_create() {
     create_kotlin_project "$proj"
   elif [ "$lang" == "cdk" ]; then
     create_cdk_project "$proj"
+  elif [ "$lang" == "rn" ]; then
+    create_react_native_project "$proj" "$3"
   else
     echo "Error: Unknown skeleton type '$lang'. Must be 'kotlin' or 'cdk'."
     usage
