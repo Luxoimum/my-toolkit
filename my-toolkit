@@ -284,7 +284,6 @@ function workspace_add() {
 
     # Append local_repository to WORKSPACE
     cat <<EOF >> WORKSPACE
-
 # Added by my-toolkit for $PKG
 local_repository(
     name = "$REPO_NAME",
@@ -420,6 +419,12 @@ function create_kotlin_project() {
     exit 1
   fi
 
+  # Validate you are within a Bazel workspace
+  if [ ! -f "WORKSPACE" ]; then
+    echo "Error: No WORKSPACE file in current directory. Please create a Bazel workspace first."
+    exit 1
+  fi
+
   mkdir -p "$projectName/src/main/kotlin/${projectName}"
   mkdir -p "$projectName/src/test/kotlin/${projectName}"
 
@@ -466,6 +471,15 @@ KOTLIN_TEST
   inplace_sed "PROJECT_NAME" "$projectName" "${projectName}/src/main/kotlin/${projectName}/App.kt"
   inplace_sed "PROJECT_NAME" "$projectName" "${projectName}/src/test/kotlin/${projectName}/AppTest.kt"
 
+  # Append local_repository to WORKSPACE
+  cat <<EOF >> WORKSPACE
+# Added by my-toolkit for $PKG
+local_repository(
+    name = "$projectName",
+    path = "$projectName",
+)
+EOF
+
   # Minimal BUILD.bazel for gradle_package
   cat <<BUILD_EOF > "${projectName}/BUILD.bazel"
 load("//:my_rules.bzl", "gradle_package")
@@ -508,71 +522,31 @@ function create_cdk_project() {
     exit 1
   fi
 
-  mkdir -p "$projectName/src"
+  # Validate you are within a Bazel workspace
+  if [ ! -f "WORKSPACE" ]; then
+    echo "Error: No WORKSPACE file in current directory. Please create a Bazel workspace first."
+    exit 1
+  fi
 
-  cat <<'PKGJSON_EOF' > "${projectName}/package.json"
-{
-  "name": "PROJECT_NAME",
-  "version": "0.1.0",
-  "description": "Minimal CDK project",
-  "scripts": {
-    "build": "tsc",
-    "deploy": "cdk deploy"
-  },
-  "devDependencies": {
-    "typescript": "^4.9.5",
-    "@aws-cdk/assertions": "2.65.0",
-    "@aws-cdk/core": "2.65.0"
-  },
-  "dependencies": {
-    "aws-cdk-lib": "2.65.0",
-    "constructs": "^10.1.246"
-  }
-}
-PKGJSON_EOF
+  # Install cdk
+  if ! command -v cdk >/dev/null 2>&1; then
+    echo "Installing AWS CDK..."
+    npm install -g aws-cdk
+  fi
 
-  inplace_sed "PROJECT_NAME" "$projectName" "${projectName}/package.json"
+  mkdir -p "$projectName"
 
-  # tsconfig.json
-  cat <<'TSCONFIG_EOF' > "${projectName}/tsconfig.json"
-{
-  "compilerOptions": {
-    "target": "ES2021",
-    "module": "commonjs",
-    "strict": true,
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "outDir": "dist"
-  },
-  "include": [
-    "src/**/*.ts"
-  ]
-}
-TSCONFIG_EOF
+  # Create minimal CDK project for infrastructure using CDK CLI (TypeScript)
+  cd "$projectName" && cdk init app --language typescript && cd ..
 
-  # cdk.json
-  cat <<'CDKJSON_EOF' > "${projectName}/cdk.json"
-{
-  "app": "npx ts-node --prefer-ts-exts src/index.ts"
-}
-CDKJSON_EOF
-
-  # Minimal index.ts
-  cat <<'INDEX_TS_EOF' > "${projectName}/src/index.ts"
-import { App, Stack, StackProps } from 'aws-cdk-lib';
-import { Construct } from 'constructs';
-
-export class MyCdkStack extends Stack {
-  constructor(scope: Construct, id: string, props?: StackProps) {
-    super(scope, id, props);
-    // Define your resources here
-  }
-}
-
-const app = new App();
-new MyCdkStack(app, 'MyCdkStack');
-app.synth();
-INDEX_TS_EOF
+  # Append local_repository to WORKSPACE
+  cat <<EOF >> WORKSPACE
+# Added by my-toolkit for $PKG
+local_repository(
+    name = "$projectName",
+    path = "$projectName",
+)
+EOF
 
   # Minimal BUILD.bazel for node_package
   cat <<BUILD_EOF > "${projectName}/BUILD.bazel"
@@ -631,6 +605,15 @@ function create_react_native_project() {
   else
     npx @react-native-community/cli init $projectName
   fi
+
+  # Append local_repository to WORKSPACE
+  cat <<EOF >> WORKSPACE
+# Added by my-toolkit for $PKG
+local_repository(
+    name = "$projectName",
+    path = "$projectName",
+)
+EOF
 
   # Minimal BUILD.bazel for node_package
   cat <<BUILD_EOF > "${projectName}/BUILD.bazel"
